@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: 'SAM template for Serverless framework service: sample_dynamodb_demo'
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedValues:
+      - Prod
+      - Release
+      - Stage
+      - Test
+      - Dev
+    Default: Dev
+    Description: Stage that can be added to resource names
+  ProjectName:
+    Default: personal
+    Type: String
+    Description: Name of the project that these functions are for
+  ServiceName:
+    Default: generic
+    Type: String
+    Description: service-name
+
+Conditions:
+  DevEnvironment: !Equals [ !Ref Stage, Dev ]
+
+Mappings:
+  Environments:
+    Dev:
+      Name: dev
+    Test:
+      Name: test
+    Stage:
+      Name: stage
+    Prod:
+      Name: prod
+
+Globals:
+  Function:
+    MemorySize: 512
+    Timeout: 29
+    Runtime: python3.9
+    Layers:
+       - !Ref LayerInstanceName
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+        PROJECT_NAME: !Ref ProjectName
+        REGION: !Ref AWS::Region
+
+Resources:
+  SampleTxnTableForDemo:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: !Sub '${ProjectName}-${Stage}-${ServiceName}-sample-txn-table-demo'
+      BillingMode: "PROVISIONED"
+      AttributeDefinitions:
+        - AttributeName: txn_id
+          AttributeType: S
+        - AttributeName: client_id
+          AttributeType: S
+        - AttributeName: business_date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: txn_id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: !If [ DevEnvironment, 1, 5 ]
+        WriteCapacityUnits: !If [ DevEnvironment, 1, 5 ]
+      GlobalSecondaryIndexes:
+        - IndexName: !Sub '${ProjectName}-${Stage}-${ServiceName}-sample-txn-table-demo-index'
+          KeySchema:
+            - AttributeName: client_id
+              KeyType: HASH
+            - AttributeName: business_date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: !If [ DevEnvironment, 1, 5 ]
+            WriteCapacityUnits: !If [ DevEnvironment, 1, 5 ]
+
+  ServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: !Sub /${ProjectName}/services/backend/
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaRole
+
+  ServiceRolePolicies:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub ${ProjectName}-${Stage}-${ServiceName}-ServiceRolePolicies
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Action:
+              - sts:GetSessionToken
+              - sts:AssumeRole
+              - sts:GetCallerIdentity
+            Resource:
+              - "*"
+          - Effect: 'Allow'
+            Action:
+              - lambda:*
+              - iam:*
+              - s3:*
+              - dynamodb:*
+            Resource:
+              - !GetAtt SampleTxnTableForDemo.Arn
+              - Fn::Sub:
+                  - "${TableArn}/index/*"
+                  - TableArn:
+                      !GetAtt SampleTxnTableForDemo.Arn
+      Roles:
+        - Ref: ServiceRole
